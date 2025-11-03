@@ -1,7 +1,10 @@
 fastapi
-uvicorn[standard]
+uvicorn
+sqlalchemy
+alembic
+psycopg2-binary
+python-dotenv
 pydantic
-pytest
-requests
+qdrant-client
 sentence-transformers
-numpy
+langchain

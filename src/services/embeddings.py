@@ -1,51 +1,32 @@
-from typing import List, Optional
-import os
-import logging
-import numpy as np
+from sentence_transformers import SentenceTransformer
+from qdrant_client import QdrantClient
+from qdrant_client.models import PointStruct
+import uuid
+from src.core.config import settings
 
-from models.product import Product
-from services.vector_store import InMemoryVectorStore
-from utils.helpers import normalize_text
+model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+qdrant = QdrantClient(host="qdrant", port=6333)
 
-logger = logging.getLogger(__name__)
+# Créer la collection s'il n'existe pas
+qdrant.recreate_collection(
+    collection_name="products",
+    vectors_config={"size": 384, "distance": "Cosine"}
+)
 
+def add_product_embedding(product_id, text: str):
+    vector = model.encode(text).tolist()
+    qdrant.upsert(
+        collection_name="products",
+        points=[PointStruct(id=str(uuid.uuid4()), vector=vector, payload={"product_id": str(product_id)})]
+    )
 
-class EmbeddingService:
-    def __init__(self, model_name: Optional[str] = None):
-        # default model dim for all-MiniLM-L6-v2 is 384
-        self.dim = 384
-        self.store = InMemoryVectorStore(dim=self.dim)
-        self.model = None
-        # try to import sentence_transformers lazily
-        try:
-            from sentence_transformers import SentenceTransformer
+def find_similar_products(product_id: str, limit: int = 5):
+    # Récupérer le vecteur du produit
+    results = qdrant.scroll(collection_name="products", scroll_filter={"must": [{"key": "product_id", "match": {"value": product_id}}]})
+    if not results[0]:
+        return []
 
-            self.model = SentenceTransformer(model_name or "sentence-transformers/all-MiniLM-L6-v2")
-            self.dim = self.model.get_sentence_embedding_dimension()
-            logger.info("Loaded sentence-transformers model: %s", model_name)
-        except Exception:
-            logger.warning("sentence-transformers not available, using random fallback embeddings")
-
-    def _embed_text(self, text: str) -> List[float]:
-        text = normalize_text(text or "")
-        if self.model:
-            vec = self.model.encode(text).tolist()
-            return vec
-        # fallback deterministic pseudo-embedding using hashing
-        rng = np.random.RandomState(abs(hash(text)) % (2 ** 32))
-        return rng.rand(self.dim).tolist()
-
-    def upsert_product(self, product: Product):
-        base = f"{product.title} {product.description or ''} {product.category or ''}"
-        vec = self._embed_text(base)
-        self.store.upsert(product.id, vec, metadata=product.dict())
-
-    def get_embedding(self, product_id: str):
-        meta, vec = self.store.get(product_id)
-        return vec
-
-    def search_similar(self, product_id: str, k: int = 5):
-        vec = self.get_embedding(product_id)
-        if vec is None:
-            return []
-        return self.store.search(vec, k=k)
+    vector = results[0][0].vector
+    # Rechercher les vecteurs les plus similaires
+    hits = qdrant.search(collection_name="products", query_vector=vector, limit=limit)
+    return [hit.payload["product_id"] for hit in hits if hit.payload["product_id"] != product_id]

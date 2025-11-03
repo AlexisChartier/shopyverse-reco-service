@@ -1,30 +1,35 @@
-from fastapi import APIRouter, HTTPException, Query
-from typing import List
-
-from api import schemas
-from models.product import Product
-from services.embeddings import EmbeddingService
-from services.recommender import Recommender
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from src.core.database import SessionLocal
+from src.models.product import Product
+from src.services.embeddings import add_product_embedding, find_similar_products
+from src.schemas.product import ProductCreate, ProductResponse
 
 router = APIRouter()
 
-# simple in-memory instances for this prototype
-embedding_svc = EmbeddingService()
-recommender = Recommender(embedding_svc)
-
-
-@router.post("/products", status_code=201)
-def add_product(product: schemas.ProductIn):
-    p = Product(**product.dict())
-    # store embedding and metadata
+def get_db():
+    db = SessionLocal()
     try:
-        embedding_svc.upsert_product(p)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    return {"status": "ok", "id": p.id}
+        yield db
+    finally:
+        db.close()
 
+@router.post("/products", response_model=ProductResponse)
+def create_product(product: ProductCreate, db: Session = Depends(get_db)):
+    new_product = Product(**product.model_dump())
+    db.add(new_product)
+    db.commit()
+    db.refresh(new_product)
 
-@router.get("/recommendations", response_model=schemas.RecommendationsOut)
-def get_recommendations(product_id: str = Query(..., description="Product id to query"), k: int = 5):
-    recs = recommender.recommend_similar(product_id=product_id, k=k)
-    return {"query_product": product_id, "recommendations": recs}
+    # créer embedding et stocker dans Qdrant
+    add_product_embedding(new_product.id, f"{new_product.name} {new_product.description}")
+
+    return new_product
+
+@router.get("/recommendations", response_model=list[ProductResponse])
+def get_recommendations(product_id: str, db: Session = Depends(get_db)):
+    similar_ids = find_similar_products(product_id)
+    products = db.query(Product).filter(Product.id.in_(similar_ids)).all()
+    if not products:
+        raise HTTPException(status_code=404, detail="No recommendations found")
+    return products
