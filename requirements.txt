@@ -8,3 +8,5 @@ pydantic
 qdrant-client
 sentence-transformers
 langchain
+streamlit
+requests

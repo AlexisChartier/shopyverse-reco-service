@@ -33,3 +33,7 @@ def get_recommendations(product_id: str, db: Session = Depends(get_db)):
     if not products:
         raise HTTPException(status_code=404, detail="No recommendations found")
     return products
+
+@router.get("/products/list")
+def list_products(db: Session = Depends(get_db)):
+    return db.query(Product).all()
