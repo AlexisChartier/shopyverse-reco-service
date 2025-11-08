@@ -1,6 +1,5 @@
 from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
-from sqlalchemy import pool
 from alembic import context
 from src.core.database import Base
 from src.models.product import Product
@@ -17,15 +16,15 @@ if config.config_file_name is not None:
 
 # add your model's MetaData object here
 # for 'autogenerate' support
-# Import the project's Base (SQLAlchemy declarative base) and use its
-# metadata so Alembic can autogenerate migrations from the models.
 # from myapp import mymodel
+# target_metadata = mymodel.Base.metadata
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
+
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
@@ -39,7 +38,6 @@ def run_migrations_offline() -> None:
     script output.
 
     """
-    
     context.configure(
         url=settings.DATABASE_URL,
         target_metadata=target_metadata,
@@ -71,6 +69,7 @@ def run_migrations_online() -> None:
 
         with context.begin_transaction():
             context.run_migrations()
+
 
 if context.is_offline_mode():
     run_migrations_offline()
