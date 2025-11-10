@@ -5,8 +5,11 @@ alembic
 psycopg2-binary
 python-dotenv
 pydantic
-qdrant-client
-sentence-transformers
+# qdrant-client
+# sentence-transformers
 langchain
+langsmith
+huggingface-hub
+python-multipart
 streamlit
 requests

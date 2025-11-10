@@ -5,6 +5,6 @@ load_dotenv()
 
 class Settings:
     DATABASE_URL: str = os.getenv("DATABASE_URL")
-    QDRANT_URL: str = os.getenv("QDRANT_URL")
+    # QDRANT_URL: str = os.getenv("QDRANT_URL")
 
 settings = Settings()
