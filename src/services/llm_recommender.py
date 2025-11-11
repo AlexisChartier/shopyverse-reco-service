@@ -1,4 +1,5 @@
 from typing import List, Optional
+import os
 import json
 import re
 import logging
@@ -70,7 +71,7 @@ def recommend_products(
     - Construit le prompt et appelle le modèle via LangChain
     - Parse la réponse JSON et renvoie la liste d'IDs triés
     """
-
+    
     # 1) Récupère le produit cible
     target = db.query(Product).filter(Product.id == product_id).first()
     if not target:
@@ -112,7 +113,7 @@ def recommend_products(
             max_new_tokens=512,
             do_sample=False,
         )
-        chat = ChatHuggingFace(llm=llm, verbose=False)
+        chat = ChatHuggingFace(llm=llm, verbose=True)
 
         messages = [
             ("system", "Tu es un moteur de recommandation produit."),
@@ -130,6 +131,7 @@ def recommend_products(
 
     # 5) Parse la réponse JSON
     json_str = _extract_json(text)
+    print("Extracted JSON:", json_str)
     if not json_str:
         logging.warning("No JSON found in model response. Returning candidate fallback.")
         return [str(p.id) for p in candidates[:limit]]
@@ -152,9 +154,24 @@ def recommend_products(
             if pid is not None:
                 results.append((str(pid), score))
 
-        # Sort by score desc and return up to `limit` ids
+        # Sort by score desc
         results.sort(key=lambda x: x[1], reverse=True)
-        return [r[0] for r in results][:limit]
+
+        # Only keep IDs that are in our prefiltered candidates (avoid fake IDs from LLM)
+        candidate_ids = {str(p.id) for p in candidates}
+        model_ids = [r[0] for r in results]
+        discarded = [mid for mid in model_ids if mid not in candidate_ids]
+        if discarded:
+            logging.info("Discarding model-generated ids not present in candidates: %s", discarded)
+
+        filtered = [r for r in results if r[0] in candidate_ids]
+
+        if not filtered:
+            # If LLM didn't return any valid candidate ids, fallback to DB candidates order
+            logging.info("No LLM recommendations matched DB candidates, falling back to prefiltered candidates")
+            return [str(p.id) for p in candidates[:limit]]
+
+        return [r[0] for r in filtered][:limit]
     except Exception:
         logging.exception("Failed to parse JSON from model response")
         return [str(p.id) for p in candidates[:limit]]
