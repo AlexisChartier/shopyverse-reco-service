@@ -7,9 +7,11 @@ python-dotenv
 pydantic
 # qdrant-client
 # sentence-transformers
-langchain
-langsmith
+# langsmith
 huggingface-hub
 python-multipart
 streamlit
 requests
+transformers>=4.43.0
+torch
+langchain_huggingface

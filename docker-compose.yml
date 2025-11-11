@@ -8,10 +8,8 @@ services:
       - "8002:8000"
     environment:
       - DATABASE_URL=postgresql+psycopg2://admin:admin@postgres:5432/shopyverse_reco
-#      - QDRANT_URL=http://qdrant:6333
     depends_on:
       - postgres
-#      - qdrant
     volumes:
       - ./:/app
     command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
@@ -28,14 +26,5 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
-  # qdrant:
-  #   image: qdrant/qdrant:v1.8.1
-  #   container_name: shopyverse-qdrant
-  #   ports:
-  #     - "6333:6333"
-  #   volumes:
-  #     - qdrant_storage:/qdrant/storage
-
 volumes:
   pgdata:
-#  qdrant_storage:

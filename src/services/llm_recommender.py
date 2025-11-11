@@ -1,23 +1,11 @@
 from typing import List, Optional
-import os
 import json
 import re
-
+import logging
+from decimal import Decimal
 from sqlalchemy.orm import Session
-
 from src.models.product import Product
-
-try:
-    from langchain.llms import HuggingFaceHub
-    # LangSmith tracer is optional
-    try:
-        from langchain.callbacks.tracers import LangSmithTracer
-    except Exception:
-        LangSmithTracer = None
-except Exception:
-    # If langchain not installed, we will raise at runtime when used
-    HuggingFaceHub = None
-    LangSmithTracer = None
+from langchain_huggingface import HuggingFaceEndpoint, ChatHuggingFace
 
 
 def _build_prompt(target: Product, candidates: List[Product], top_k: int = 5) -> str:
@@ -75,7 +63,7 @@ def recommend_products(
     candidate_limit: int = 30,
 ) -> List[str]:
     """
-    Recommande des produits en s'appuyant sur un LLM (Llama-3.1-8B-Instruct via HuggingFaceHub).
+    Recommande des produits en s'appuyant sur un LLM (Llama-3.1-8B-Instruct).
 
     - Récupère le produit cible depuis la base
     - Pré-filtre des candidats (même catégorie, gamme de prix +/-20%)
@@ -83,65 +71,92 @@ def recommend_products(
     - Parse la réponse JSON et renvoie la liste d'IDs triés
     """
 
-    if HuggingFaceHub is None:
-        raise RuntimeError("langchain is required for LLM recommender. Install requirements and try again.")
+    # 1) Récupère le produit cible
+    target = db.query(Product).filter(Product.id == product_id).first()
+    if not target:
+        logging.warning("Product with id %s not found", product_id)
+        return []
 
-    # fetch target product
-    target = db.query(Product).filter(Product.id == product_id).one_or_none()
-    if target is None:
-        raise ValueError(f"Product {product_id} not found")
+    # 2) Pré-filtre des candidats: même catégorie et gamme de prix +/-20%
+    price_val = None
+    try:
+        price_val = float(target.price) if target.price is not None else None
+    except Exception:
+        # If price cannot be interpreted, ignore price filter
+        price_val = None
 
-    # Simple prefilter: same category + price window
-    q = db.query(Product).filter(Product.id != product_id)
+    query = db.query(Product).filter(Product.id != target.id)
     if target.category:
-        q = q.filter(Product.category == target.category)
+        query = query.filter(Product.category == target.category)
 
-    candidates = q.limit(candidate_limit).all()
+    if price_val is not None:
+        min_p = Decimal(price_val) * Decimal("0.8")
+        max_p = Decimal(price_val) * Decimal("1.2")
+        query = query.filter(Product.price >= min_p, Product.price <= max_p)
 
-    # If category filter returns too few, widen to any product
+    candidates = query.limit(candidate_limit).all()
+
     if not candidates:
-        candidates = db.query(Product).filter(Product.id != product_id).limit(candidate_limit).all()
+        logging.info("No candidates found for product %s", product_id)
+        return []
 
-    # Build prompt
+    # 3) Construit le prompt
     prompt = _build_prompt(target, candidates, top_k=limit)
 
-    # Instantiate LLM (HuggingFaceHub) - expects HUGGINGFACEHUB_API_TOKEN in env
-    hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
-    if not hf_token:
-        raise RuntimeError("HUGGINGFACEHUB_API_TOKEN not set. Set it to call the Llama model via HuggingFace Inference API.")
+    # 4) Appelle le modèle via LangChain -> HuggingFace
+    try:
+        # Create the low-level endpoint wrapper
+        llm = HuggingFaceEndpoint(
+            repo_id="meta-llama/Llama-3.1-8B-Instruct",
+            task="text-generation",
+            max_new_tokens=512,
+            do_sample=False,
+        )
+        chat = ChatHuggingFace(llm=llm, verbose=False)
 
-    # Using meta-llama Llama-3.1-8B-Instruct model name on HF - may vary if your deployment differs
-    llm = HuggingFaceHub(repo_id="meta-llama/Llama-3.1-8b-instruct", huggingfacehub_api_token=hf_token, model_kwargs={"temperature":0.0, "max_length":1024})
+        messages = [
+            ("system", "Tu es un moteur de recommandation produit."),
+            ("human", prompt),
+        ]
 
-    # Optional LangSmith tracer
-    tracer = None
-    langsmith_key = os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGSMITH_API_TOKEN")
-    if LangSmithTracer is not None and langsmith_key:
-        try:
-            tracer = LangSmithTracer()
-        except Exception:
-            tracer = None
+        ai_msg = chat.invoke(messages)
 
-    # Call the model
-    if tracer is not None:
-        with tracer.as_default():
-            raw = llm(prompt)
-    else:
-        raw = llm(prompt)
+        # ai_msg may be an object with `.content`
+        text = getattr(ai_msg, "content", None) or str(ai_msg)
+    except Exception as e:
+        logging.exception("LLM call failed: %s", e)
+        # Fallback: return first N candidate ids
+        return [str(p.id) for p in candidates[:limit]]
 
-    # Parse result
-    json_text = _extract_json(raw)
-    if not json_text:
-        # If model did not return JSON, raise with raw text for debugging
-        raise ValueError(f"LLM did not return valid JSON. Raw response: {raw}")
+    # 5) Parse la réponse JSON
+    json_str = _extract_json(text)
+    if not json_str:
+        logging.warning("No JSON found in model response. Returning candidate fallback.")
+        return [str(p.id) for p in candidates[:limit]]
 
-    parsed = json.loads(json_text)
-    product_ids: List[str] = []
-    for item in parsed:
-        pid = item.get("product_id") or item.get("id")
-        if pid:
-            product_ids.append(str(pid))
-        if len(product_ids) >= limit:
-            break
+    try:
+        parsed = json.loads(json_str)
+        # Expecting a list of objects with product_id and score
+        if not isinstance(parsed, list):
+            logging.warning("Parsed JSON is not a list. Fallback to candidates.")
+            return [str(p.id) for p in candidates[:limit]]
 
-    return product_ids
+        # Build list of tuples (id, score)
+        results = []
+        for item in parsed:
+            pid = item.get("product_id") or item.get("productId") or item.get("id")
+            try:
+                score = float(item.get("score", 0.0))
+            except Exception:
+                score = 0.0
+            if pid is not None:
+                results.append((str(pid), score))
+
+        # Sort by score desc and return up to `limit` ids
+        results.sort(key=lambda x: x[1], reverse=True)
+        return [r[0] for r in results][:limit]
+    except Exception:
+        logging.exception("Failed to parse JSON from model response")
+        return [str(p.id) for p in candidates[:limit]]
+
+    

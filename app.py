@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 
-API_URL = "http://localhost:8002/api"  # modify if needed
+API_URL = "http://localhost:8002/api"  
 
 st.set_page_config(page_title="🛒 Shopyverse - Reco Tester", layout="centered")
 st.title("🛒 Shopyverse - Test du système de recommandation")
