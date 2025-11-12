@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  reco-service:
+    build: .
+    container_name: shopyverse-reco
+    ports:
+      - "8002:8000"
+    environment:
+      - DATABASE_URL=postgresql+psycopg2://admin:admin@postgres:5432/shopyverse_reco
+    depends_on:
+      - postgres
+    volumes:
+      - ./:/app
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+
+  postgres:
+    image: postgres:16
+    container_name: shopyverse-reco-db
+    environment:
+      POSTGRES_DB: shopyverse_reco
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
