@@ -1,0 +1,46 @@
+name: Docker Build and Push
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+
+    env:
+      IMAGE_NAME: shopyverse-reco-service
+      # IMAGE_REGISTRY can be ghcr.io, docker.io, or your private registry
+      IMAGE_REGISTRY: ${{ secrets.REGISTRY_URL }}
+      IMAGE_NAMESPACE: ${{ secrets.REGISTRY_NAMESPACE }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.IMAGE_REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and push
+        id: build
+        run: |
+          IMAGE=${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}
+          TAG=${GITHUB_SHA}
+          docker buildx build --platform linux/amd64,linux/arm64 --push -t ${IMAGE}:${TAG} -t ${IMAGE}:latest .
+          echo "image=${IMAGE}:${TAG}" >> $GITHUB_OUTPUT
+
+      - name: Output image
+        run: |
+          echo "Built and pushed ${{ steps.build.outputs.image }}"

@@ -1,0 +1,84 @@
+name: Update GitOps (deploy)
+
+# This workflow runs when the Docker build workflow completes successfully.
+on:
+  workflow_run:
+    workflows: ["Docker Build and Push"]
+    types:
+      - completed
+
+jobs:
+  update-gitops:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    env:
+      # Where to push the updated manifests (owner/repo)
+      GITOPS_REPO: ${{ secrets.GITOPS_REPO }}
+      # Token with push permissions to the infra/gitops repo
+      GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+      # Path inside the gitops repo to the service overlay (relative path)
+      # e.g. clusters/staging/shopyverse-reco-service/kustomization.yaml
+      GITOPS_MANIFEST_PATH: ${{ secrets.GITOPS_MANIFEST_PATH }}
+      # Image reference used in kustomization or manifest
+      IMAGE_REGISTRY: ${{ secrets.REGISTRY_URL }}
+      IMAGE_NAMESPACE: ${{ secrets.REGISTRY_NAMESPACE }}
+      IMAGE_NAME: shopyverse-reco-service
+      IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+
+    steps:
+      - name: Checkout (tooling)
+        uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
+          YQ_BIN=/usr/local/bin/yq
+          curl -sSL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o $YQ_BIN
+          chmod +x $YQ_BIN
+
+      - name: Clone gitops repo
+        run: |
+          git config --global user.email "github-actions@users.noreply.github.com"
+          git config --global user.name "github-actions"
+          git clone https://${GITOPS_TOKEN}@github.com/${GITOPS_REPO}.git infra
+
+      - name: Patch image tag in kustomization (try kustomize images entry)
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          MANIFEST=${GITOPS_MANIFEST_PATH:-clusters/staging/shopyverse-reco-service/kustomization.yaml}
+          FILE="$MANIFEST"
+          echo "Patching file: $FILE"
+
+          IMAGE=${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}
+
+          if [ -f "$FILE" ]; then
+            # If kustomization has `images` array, update newTag for matching name
+            if yq e '.images' $FILE >/dev/null 2>&1; then
+              # update first matching image name
+              yq e -i "(.images[] | select(.name == \"${IMAGE}\") ).newTag = \"${IMAGE_TAG}\"" $FILE || true
+            fi
+
+            # Fallback: try to replace an explicit image string in the file
+            sed -i "s|${IMAGE}:.*|${IMAGE}:${IMAGE_TAG}|g" $FILE || true
+          else
+            echo "Manifest file $FILE not found. Exiting." >&2
+            exit 1
+          fi
+
+          git add $FILE
+          git commit -m "chore: deploy ${IMAGE}:${IMAGE_TAG} (from ${GITHUB_REPOSITORY}@${GITHUB_SHA})" || echo "No changes to commit"
+          git push origin HEAD:main || true
+
+      - name: Create PR (optional)
+        working-directory: infra
+        run: |
+          # Optionally create a PR instead of pushing to main directly.
+          # This step attempts to create a PR using the GH CLI if available.
+          if command -v gh >/dev/null 2>&1; then
+            gh auth login --with-token < <(echo ${GITOPS_TOKEN})
+            gh pr create --title "chore: deploy ${IMAGE_NAME}:${IMAGE_TAG}" --body "Automated image update" --base main --head "deploy-${IMAGE_NAME}-${IMAGE_TAG}" || echo "PR creation skipped or failed"
+          else
+            echo "gh CLI not installed; skipping PR creation"
+          fi
