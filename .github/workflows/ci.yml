@@ -24,6 +24,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install -e . # Rend le projet installable pour que le repo soit accessible dans l'environnement de la CI
           pip install -r requirements.txt
 
       - name: Lint (flake8)
