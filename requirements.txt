@@ -5,8 +5,6 @@ alembic
 psycopg2-binary
 python-dotenv
 pydantic
-# qdrant-client
-# sentence-transformers
 # langsmith
 huggingface-hub
 python-multipart
@@ -15,3 +13,6 @@ requests
 transformers>=4.43.0
 torch
 langchain_huggingface
+pytest
+flake8
+scikit-learn
